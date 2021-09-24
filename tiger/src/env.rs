@@ -141,14 +141,14 @@ pub fn external_functions() -> BTreeMap<&'static str, (Vec<Type>, Type)> {
     let mut functions = BTreeMap::new();
     functions.insert("print", (vec![Type::String], Type::Unit));
     functions.insert("printi", (vec![Type::Int], Type::Unit));
-    functions.insert("flush", (vec![], Type::Unit));
+    //functions.insert("flush", (vec![], Type::Unit));
     functions.insert("getchar", (vec![], Type::String));
     functions.insert("ord", (vec![Type::String], Type::Int));
     functions.insert("chr", (vec![Type::Int], Type::String));
-    functions.insert("size", (vec![Type::String], Type::Int));
-    functions.insert("substring", (vec![Type::String, Type::Int, Type::Int], Type::String));
+    //functions.insert("size", (vec![Type::String], Type::Int));
+    //functions.insert("substring", (vec![Type::String, Type::Int, Type::Int], Type::String));
     functions.insert("concat", (vec![Type::String, Type::String], Type::String));
-    functions.insert("not", (vec![Type::Int], Type::Int));
+    //functions.insert("not", (vec![Type::Int], Type::Int));
     functions.insert("exit", (vec![Type::Int], Type::Unit));
     functions.insert("stringEqual", (vec![Type::String, Type::String], Type::Int));
 
