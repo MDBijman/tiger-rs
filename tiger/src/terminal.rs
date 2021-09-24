@@ -21,7 +21,6 @@
 
 use std::io::stderr;
 use std::os::raw::c_int;
-use std::os::unix::io::AsRawFd;
 
 const BOLD: &str = "\x1b[1m";
 const BLUE: &str = "\x1b[34m";
@@ -88,10 +87,6 @@ impl Terminal {
 
 fn stderr_is_a_tty() -> bool {
     unsafe {
-        isatty(stderr().as_raw_fd()) != 0
+        false
     }
-}
-
-extern "C" {
-    fn isatty(fd: c_int) -> c_int;
 }
