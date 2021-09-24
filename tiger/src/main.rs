@@ -62,8 +62,8 @@ mod terminal;
 mod token;
 mod types;
 
-use std::env::args;
-use std::fs::{File, read_dir};
+use std::env::{args, current_dir};
+use std::fs::{read_dir, File};
 use std::io::{self, BufReader, Write};
 use std::path::PathBuf;
 use std::process::Command;
@@ -75,28 +75,38 @@ use data_layout::{STRING_DATA_LAYOUT_SIZE, STRING_TYPE};
 use env::Env;
 use error::Error;
 use escape::find_escapes;
-use frame::{Fragment, Frame};
 use frame::x86_64::X86_64;
+use frame::{Fragment, Frame};
 use lexer::Lexer;
 use parser::Parser;
 use reg_alloc::alloc;
 use rewriter::Rewriter;
 use semant::SemanticAnalyzer;
+use std::thread;
 use symbol::{Strings, Symbols};
 use terminal::Terminal;
-
+const STACK_SIZE: usize = 4 * 1024 * 1024;
 const END_MARKER: &str = "__tiger_pointer_map_end";
 const POINTER_MAP_NAME: &str = "__tiger_pointer_map";
 
 fn main() {
-    let strings = Rc::new(Strings::new());
-    let mut symbols = Symbols::new(Rc::clone(&strings));
-    if let Err(error) = drive(strings, &mut symbols) {
-        let terminal = Terminal::new();
-        if let Err(error) = error.show(&symbols, &terminal) {
-            eprintln!("Error printing errors: {}", error);
-        }
-    }
+    // Spawn thread with explicit stack size
+    let child = thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .spawn(|| {
+            let strings = Rc::new(Strings::new());
+            let mut symbols = Symbols::new(Rc::clone(&strings));
+            if let Err(error) = drive(strings, &mut symbols) {
+                let terminal = Terminal::new();
+                if let Err(error) = error.show(&symbols, &terminal) {
+                    eprintln!("Error printing errors: {}", error);
+                }
+            }
+        })
+        .unwrap();
+
+    // Wait for thread to join
+    child.join().unwrap();
 }
 
 fn drive(strings: Rc<Strings>, symbols: &mut Symbols<()>) -> Result<(), Error> {
@@ -116,7 +126,8 @@ fn drive(strings: Rc<Strings>, symbols: &mut Symbols<()>) -> Result<(), Error> {
         let escape_env = find_escapes(&ast, Rc::clone(&strings));
         let mut env = Env::<X86_64>::new(&strings, escape_env);
         {
-            let semantic_analyzer = SemanticAnalyzer::new(&mut env, Rc::clone(&strings), self_symbol, object_symbol);
+            let semantic_analyzer =
+                SemanticAnalyzer::new(&mut env, Rc::clone(&strings), self_symbol, object_symbol);
             let fragments = semantic_analyzer.analyze(main_symbol, ast)?;
 
             let mut asm_output_path = PathBuf::from(&filename);
@@ -147,17 +158,21 @@ fn drive(strings: Rc<Strings>, symbols: &mut Symbols<()>) -> Result<(), Error> {
                             writeln!(file, "dq 0")?;
                         }
                         writeln!(file, "db {}, 0", to_nasm(string))?;
-                    },
-                    Fragment::VTable { ref class, ref methods } => {
+                    }
+                    Fragment::VTable {
+                        ref class,
+                        ref methods,
+                    } => {
                         writeln!(file, "{}:", class)?;
                         if !methods.is_empty() {
-                            let labels = methods.iter()
+                            let labels = methods
+                                .iter()
                                 .map(|label| label.to_string())
                                 .collect::<Vec<_>>()
                                 .join("\n    dq ");
                             writeln!(file, "    dq {}", labels)?;
                         }
-                    },
+                    }
                 }
             }
 
@@ -167,7 +182,12 @@ fn drive(strings: Rc<Strings>, symbols: &mut Symbols<()>) -> Result<(), Error> {
 
             for fragment in fragments {
                 match fragment {
-                    Fragment::Function { body, escaping_vars, frame, temp_map } => {
+                    Fragment::Function {
+                        body,
+                        escaping_vars,
+                        frame,
+                        temp_map,
+                    } => {
                         let mut frame = frame.borrow_mut();
                         let body = frame.proc_entry_exit1(body);
 
@@ -182,7 +202,8 @@ fn drive(strings: Rc<Strings>, symbols: &mut Symbols<()>) -> Result<(), Error> {
                         let instructions = generator.get_result();
                         let instructions = frame.proc_entry_exit2(instructions, escaping_vars);
 
-                        let (instructions, temp_map) = alloc::<X86_64>(instructions, &mut *frame, temp_map);
+                        let (instructions, temp_map) =
+                            alloc::<X86_64>(instructions, &mut *frame, temp_map);
                         pointer_map.push(temp_map);
 
                         let subroutine = frame.proc_entry_exit3(instructions);
@@ -194,7 +215,7 @@ fn drive(strings: Rc<Strings>, symbols: &mut Symbols<()>) -> Result<(), Error> {
                             }
                         }
                         writeln!(file, "    {}", subroutine.epilog)?;
-                    },
+                    }
                     Fragment::Str(_, _) => (),
                     Fragment::VTable { .. } => (),
                 }
@@ -216,16 +237,20 @@ fn drive(strings: Rc<Strings>, symbols: &mut Symbols<()>) -> Result<(), Error> {
             writeln!(file, "{}:", END_MARKER)?;
 
             let status = Command::new("nasm")
-                .args(&["-f", "elf64", asm_output_path.to_str().expect("asm output path")])
+                .args(&[
+                    "-f",
+                    "win64",
+                    asm_output_path.to_str().expect("asm output path"),
+                ])
                 .status();
 
             match status {
                 Ok(return_code) => {
                     if return_code.success() {
                         let mut object_output_path = PathBuf::from(&filename);
-                        object_output_path.set_extension("o");
+                        object_output_path.set_extension("obj");
                         let mut executable_output_path = PathBuf::from(&filename);
-                        executable_output_path.set_extension("");
+                        /*executable_output_path.set_extension("");
                         Command::new("ld")
                             .args(&[
                                 "-dynamic-linker", "/lib64/ld-linux-x86-64.so.2", "-o",
@@ -237,9 +262,27 @@ fn drive(strings: Rc<Strings>, symbols: &mut Symbols<()>) -> Result<(), Error> {
                                 "-lgcc_s", "--no-as-needed", "/usr/lib/crtn.o"
                             ])
                             .status()
-                            .expect("link");
+                            .expect("link");*/
+
+                        executable_output_path.set_extension("exe");
+                        Command::new("clang")
+                            .args(&[
+                                "-o",
+                                executable_output_path
+                                    .to_str()
+                                    .expect("executable output path"),
+                                object_output_path.to_str().expect("object output path"),
+                                "./target/debug/runtime.lib",
+                                "-lws2_32",
+                                "-luserenv",
+                                "-ladvapi32",
+                                //"-Wl,/F4MB"
+                            ])
+                            //.current_dir(current_dir().unwrap())
+                            .status()
+                            .expect(".obj to .exe");
                     }
-                },
+                }
                 Err(error) => eprintln!("Error running nasm: {}", error),
             }
         }
@@ -251,11 +294,10 @@ fn drive(strings: Rc<Strings>, symbols: &mut Symbols<()>) -> Result<(), Error> {
 fn to_nasm(string: &str) -> String {
     let mut result = "'".to_string();
     for char in string.chars() {
-        let string =
-            match char {
-                '\'' | '\n' | '\t' => format!("', {}, '", char as u32),
-                _ => char.to_string(),
-            };
+        let string = match char {
+            '\'' | '\n' | '\t' => format!("', {}, '", char as u32),
+            _ => char.to_string(),
+        };
         result.push_str(&string);
     }
     result.push('\'');
@@ -268,7 +310,9 @@ fn get_gcc_lib_dir() -> io::Result<String> {
     for file in files {
         let file = file?;
         if file.metadata()?.is_dir() {
-            return file.file_name().to_str()
+            return file
+                .file_name()
+                .to_str()
                 .map(|str| format!("{}{}", directory, str))
                 .ok_or_else(|| io::ErrorKind::InvalidData.into());
         }
