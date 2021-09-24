@@ -51,9 +51,19 @@ impl<R: Read> Lexer<R> {
     fn advance(&mut self) -> Result<()> {
         match self.bytes_iter.next() {
             Some(Ok(b'\n')) => {
-                self.pos.line += 1;
-                self.pos.column = 1;
-                self.pos.byte += 1;
+                match self.bytes_iter.peek() {
+                    Some(Ok(b'\r')) => {
+                        self.bytes_iter.next().unwrap();
+                        self.pos.line += 1;
+                        self.pos.column = 1;
+                        self.pos.byte += 2;
+                    },
+                    _ => {
+                        self.pos.line += 1;
+                        self.pos.column = 1;
+                        self.pos.byte += 1;
+                    }
+                }
             },
             Some(Err(error)) => return Err(error.into()),
             None => return Err(Eof),
@@ -338,7 +348,7 @@ impl<R: Read> Lexer<R> {
             return match ch {
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.identifier(),
                 b'0'..=b'9' => self.integer(),
-                b' ' | b'\n' | b'\t' => {
+                b' ' | b'\n' | b'\r' | b'\t' => {
                     self.advance()?;
                     self.token()
                 }
